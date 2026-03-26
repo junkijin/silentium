@@ -1,0 +1,22 @@
+{
+  "name": "silentium",
+  "version": "0.1.0",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "bun test",
+    "build": "bun build src/main.ts --target bun --outdir dist --minify",
+    "dev": "bun run src/main.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^6"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.28.0",
+    "zod": "^4.3.6"
+  }
+}

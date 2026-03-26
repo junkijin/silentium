@@ -1,0 +1,18 @@
+{
+  "id": "mem-001",
+  "type": "fact",
+  "content": "Alice likes green tea",
+  "tags": ["tea", "beverage"],
+  "strength": 0.9,
+  "importance": 0.8,
+  "status": "active",
+  "createdAt": "2026-03-27T00:00:00.000Z",
+  "updatedAt": "2026-03-27T00:00:00.000Z",
+  "lastAccessedAt": null,
+  "reinforcementCount": 0,
+  "recallCount": 0,
+  "version": 1,
+  "validFrom": "2026-03-27T00:00:00.000Z",
+  "validTo": null,
+  "supersededBy": null
+}

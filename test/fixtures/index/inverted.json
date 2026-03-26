@@ -1,0 +1,16 @@
+{
+  "user": ["mem-001"],
+  "profile": ["mem-001"],
+  "alice": ["mem-001"],
+  "likes": ["mem-001"],
+  "green": ["mem-001"],
+  "tea": ["mem-001"],
+  "beverage": ["mem-001"],
+  "morning": ["mem-002"],
+  "drink": ["mem-002"],
+  "coffee": ["mem-002"],
+  "is": ["mem-002"],
+  "avoided": ["mem-002"],
+  "after": ["mem-002"],
+  "lunch": ["mem-002"]
+}

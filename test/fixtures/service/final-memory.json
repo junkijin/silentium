@@ -1,0 +1,19 @@
+{
+  "id": "mem-001",
+  "type": "fact",
+  "subject": "user-profile",
+  "content": "Alice prefers green tea in the afternoon",
+  "tags": ["tea", "afternoon"],
+  "strength": 0,
+  "importance": 0.9,
+  "status": "forgotten",
+  "createdAt": "2026-03-27T00:00:00.000Z",
+  "updatedAt": "2026-03-27T00:03:00.000Z",
+  "lastAccessedAt": null,
+  "reinforcementCount": 1,
+  "recallCount": 0,
+  "version": 3,
+  "validFrom": "2026-03-27T00:00:00.000Z",
+  "validTo": "2026-03-27T00:03:00.000Z",
+  "supersededBy": null
+}
