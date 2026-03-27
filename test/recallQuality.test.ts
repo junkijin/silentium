@@ -58,3 +58,73 @@ test("recall uses type intent in natural-language queries", async () => {
 
   expect(result.candidates[0]?.memory.id).toBe(target.id);
 });
+
+test("recall boosts newer memory for current-state questions", async () => {
+  const root = await createTempRoot();
+  let index = 0;
+  const offsets = [
+    "2026-01-01T00:00:00.000Z",
+    "2026-02-01T00:00:00.000Z",
+    "2026-03-01T00:00:00.000Z",
+  ];
+  const service = await createTestMemoryService(root, () => new Date(offsets[Math.min(index++, offsets.length - 1)]));
+  await service.remember({
+    type: "fact",
+    subject: "alice-home",
+    content: "Alice currently lives in Busan at her home address",
+    tags: ["home", "busan", "current"],
+    importance: 0.82,
+    strength: 0.82,
+  });
+  const target = await service.remember({
+    type: "fact",
+    subject: "alice-home",
+    content: "Alice moved to Seoul",
+    tags: ["home", "seoul"],
+    importance: 0.78,
+    strength: 0.78,
+  });
+
+  const result = await service.recall({
+    text: "where does alice live now current home",
+    limit: 3,
+  });
+
+  expect(result.candidates[0]?.memory.id).toBe(target.id);
+});
+
+test("recall surfaces bridge memory for two-hop relation queries", async () => {
+  const root = await createTempRoot();
+  const service = await createTestMemoryService(root);
+  await service.remember({
+    type: "fact",
+    subject: "mina",
+    content: "Mina's spouse is Joon",
+    tags: ["spouse", "joon"],
+    importance: 0.8,
+    strength: 0.8,
+  });
+  const target = await service.remember({
+    type: "fact",
+    subject: "joon",
+    content: "Joon lives in Incheon",
+    tags: ["incheon", "home"],
+    importance: 0.81,
+    strength: 0.8,
+  });
+  await service.remember({
+    type: "fact",
+    subject: "mina",
+    content: "Mina prefers ramen",
+    tags: ["ramen"],
+    importance: 0.63,
+    strength: 0.62,
+  });
+
+  const result = await service.recall({
+    text: "where does mina's spouse live",
+    limit: 3,
+  });
+
+  expect(result.candidates.slice(0, 2).map((candidate) => candidate.memory.id)).toContain(target.id);
+});

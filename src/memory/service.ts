@@ -42,6 +42,7 @@ import {
   type MemoryStats,
   type MemoryStatus,
   type MemoryType,
+  type RecallCandidate,
   type RecallResult,
   type RememberInput,
   type UpdateMemoryInput,
@@ -51,6 +52,30 @@ type IdSetMap<T extends string> = Map<T, Set<string>>;
 type SubjectSetMap = Map<string, Set<string>>;
 type TokenSetMap = Map<string, Set<string>>;
 type InvertedIndex = Record<string, string[]>;
+
+const RECENCY_INTENT_TOKENS = new Set([
+  "current",
+  "currently",
+  "now",
+  "latest",
+  "recent",
+  "recently",
+]);
+
+const RELATIONAL_INTENT_TOKENS = new Set([
+  "manager",
+  "team",
+  "spouse",
+  "boss",
+  "lead",
+  "mentor",
+  "report",
+  "reports",
+  "works",
+  "work",
+  "lives",
+  "live",
+]);
 
 export interface ListMemoriesOptions {
   type?: MemoryType;
@@ -178,6 +203,30 @@ function didIndexedContentChange(previous: Memory, next: Memory): boolean {
   return previous.subject !== next.subject || previous.content !== next.content || previous.tags.join("\u0000") !== next.tags.join("\u0000");
 }
 
+function sortByUpdatedAtDesc(left: Memory, right: Memory): number {
+  return (
+    right.updatedAt.localeCompare(left.updatedAt) ||
+    right.importance - left.importance ||
+    left.id.localeCompare(right.id)
+  );
+}
+
+function normalizeLooseToken(token: string): string {
+  return token.length > 3 && token.endsWith("s") ? token.slice(0, -1) : token;
+}
+
+function countLooseTokenMatches(tokens: Iterable<string>, queryTokenSet: Set<string>): number {
+  let matches = 0;
+
+  for (const token of tokens) {
+    if (queryTokenSet.has(normalizeLooseToken(token))) {
+      matches += 1;
+    }
+  }
+
+  return matches;
+}
+
 export class MemoryService {
   readonly root: string;
 
@@ -255,12 +304,18 @@ export class MemoryService {
     return this.withWriteLock(async () => {
       const parsed = RecallQuerySchema.parse(query);
       const allowedStatuses = parsed.includeStatuses ?? ["active"];
+      const queryTokens = tokenizeForIndex(
+        [parsed.text, parsed.subject ?? "", parsed.type ?? ""].filter(Boolean).join(" "),
+      );
       const subjectTokens = parsed.subject ? tokenizeForIndex(parsed.subject) : [];
       const now = this.clock();
       const recalledAt = now.toISOString();
-      const candidateIds = this.getRecallCandidateIds(parsed.text, parsed.subject);
+      const candidateIds = this.getRecallCandidateIds(parsed.text, parsed.subject, {
+        expandSubjectLinks: queryTokens.some((token) => RELATIONAL_INTENT_TOKENS.has(token)),
+      });
 
-      const candidates = [...candidateIds]
+      const candidates = this.applyRecallIntentBoosts(
+        [...candidateIds]
         .map((id) => this.memories.get(id) ?? null)
         .filter((memory): memory is Memory => memory !== null)
         .filter((memory) => allowedStatuses.includes(memory.status))
@@ -277,7 +332,9 @@ export class MemoryService {
           memory,
           ...calculateRecallScore(memory, parsed, now),
         }))
-        .filter((candidate) => candidate.recallScore > 0)
+        .filter((candidate) => candidate.recallScore > 0),
+        queryTokens,
+      )
         .sort(compareRecallCandidates);
 
       const recalledCandidates = candidates.slice(0, parsed.limit);
@@ -558,7 +615,11 @@ export class MemoryService {
     return intersectSets(filters);
   }
 
-  private getRecallCandidateIds(text: string, subject?: string): Set<string> {
+  private getRecallCandidateIds(
+    text: string,
+    subject?: string,
+    options: { expandSubjectLinks?: boolean } = {},
+  ): Set<string> {
     const tokens = tokenizeForIndex([text, subject ?? ""].filter(Boolean).join(" "));
 
     if (tokens.length === 0) {
@@ -579,7 +640,142 @@ export class MemoryService {
       }
     }
 
+    if (options.expandSubjectLinks) {
+      for (const memoryId of [...candidates]) {
+        const memory = this.memories.get(memoryId);
+
+        if (!memory || !isIndexedMemory(memory)) {
+          continue;
+        }
+
+        for (const token of tokenizeMemory(memory)) {
+          const linkedIds = this.idsBySubject.get(normalizeSubject(token));
+
+          if (!linkedIds) {
+            continue;
+          }
+
+          for (const linkedId of linkedIds) {
+            candidates.add(linkedId);
+          }
+        }
+      }
+    }
+
     return candidates;
+  }
+
+  private applyRecallIntentBoosts(
+    candidates: RecallCandidate[],
+    queryTokens: string[],
+  ): RecallCandidate[] {
+    if (candidates.length === 0) {
+      return candidates;
+    }
+
+    const hasRecencyIntent = queryTokens.some((token) => RECENCY_INTENT_TOKENS.has(token));
+    const hasRelationalIntent = queryTokens.some((token) => RELATIONAL_INTENT_TOKENS.has(token));
+    const bridgeBoostById = hasRelationalIntent
+      ? this.buildBridgeBoostMap(candidates, new Set(queryTokens))
+      : new Map<string, number>();
+
+    return candidates.map((candidate) => {
+      const bridgeBoost = bridgeBoostById.get(candidate.memory.id) ?? 0;
+      const recencyBoost = hasRecencyIntent
+        ? this.calculateRecencyIntentBoost(candidate.memory, candidates)
+        : 0;
+
+      return {
+        ...candidate,
+        recallScore: Number(Math.min(1, candidate.recallScore + bridgeBoost + recencyBoost).toFixed(6)),
+      };
+    });
+  }
+
+  private buildBridgeBoostMap(
+    candidates: RecallCandidate[],
+    queryTokenSet: Set<string>,
+  ): Map<string, number> {
+    const boosts = new Map<string, number>();
+    const memoryTokensById = new Map<string, Set<string>>();
+    const normalizedQueryTokens = new Set([...queryTokenSet].map((token) => normalizeLooseToken(token)));
+
+    for (const candidate of candidates) {
+      memoryTokensById.set(candidate.memory.id, new Set(tokenizeMemory(candidate.memory)));
+    }
+
+    for (const target of candidates) {
+      const subjectTokens = tokenizeForIndex(target.memory.subject);
+
+      if (subjectTokens.length === 0 || subjectTokens.some((token) => queryTokenSet.has(token))) {
+        continue;
+      }
+
+      let bestBoost = 0;
+
+      for (const source of candidates) {
+        if (source.memory.id === target.memory.id || source.lexicalScore < 0.25) {
+          continue;
+        }
+
+        const sourceTokens = memoryTokensById.get(source.memory.id);
+
+        if (!sourceTokens || !subjectTokens.every((token) => sourceTokens.has(token))) {
+          continue;
+        }
+
+        const targetTokenMatches = countLooseTokenMatches(
+          memoryTokensById.get(target.memory.id) ?? [],
+          normalizedQueryTokens,
+        );
+
+        bestBoost = Math.max(
+          bestBoost,
+          Math.min(
+            0.28,
+            source.lexicalScore * 0.22 +
+              source.matchedTokens.length * 0.015 +
+              Math.min(0.08, targetTokenMatches * 0.04),
+          ),
+        );
+      }
+
+      if (bestBoost > 0) {
+        boosts.set(target.memory.id, bestBoost);
+      }
+    }
+
+    return boosts;
+  }
+
+  private calculateRecencyIntentBoost(
+    memory: Memory,
+    candidates: RecallCandidate[],
+  ): number {
+    const related = candidates
+      .map((candidate) => candidate.memory)
+      .filter(
+        (candidateMemory) =>
+          candidateMemory.type === memory.type &&
+          normalizeSubject(candidateMemory.subject) === normalizeSubject(memory.subject),
+      )
+      .sort(sortByUpdatedAtDesc);
+
+    const rank = related.findIndex((candidateMemory) => candidateMemory.id === memory.id);
+
+    if (rank === -1 || related.length <= 1) {
+      return 0;
+    }
+
+    if (rank === 0) {
+      return 0.22;
+    }
+
+    if (rank === 1) {
+      return 0.08;
+    }
+
+    return 0.03;
   }
 
   private async persistChange(

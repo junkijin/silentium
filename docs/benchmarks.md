@@ -24,6 +24,7 @@
 
 ```bash
 bun run eval:memory
+bun run eval:memory:hard
 ```
 
 현재 평가는 다음 세 축을 측정합니다.
@@ -34,6 +35,19 @@ bun run eval:memory
   자연어 질의 안의 `preference`, `episode` 같은 힌트를 이용해 적절한 메모리 타입을 우선하는지 평가합니다.
 - `temporal_recency`
   유사한 기억이 여럿 있을 때 최신 사건이나 최신 선호를 앞에 두는지 평가합니다.
+
+## 하드 장기기억 평가
+
+`LongMemEval`의 어려운 축을 더 직접적으로 반영한 하드 평가도 제공합니다.
+
+- `knowledge_update`
+  오래된 표현이 질의와 더 많이 겹치더라도, `now`, `current`, `latest` 의도를 읽고 최신 기억을 우선하는지 평가합니다.
+- `multi_hop`
+  1-hop 기억에 등장한 엔터티를 따라가 2-hop 기억을 상위 결과에 포함시키는지 평가합니다.
+- `temporal_reasoning`
+  `after`, `before`, `most recently` 같은 시간 단서를 따라 올바른 사건을 우선하는지 평가합니다.
+- `abstention`
+  관련 기억이 없을 때 억지로 후보를 내놓지 않는지 평가합니다.
 
 ## 실행
 
@@ -72,3 +86,9 @@ BENCH_REBUILD_MEMORY_COUNT=80
 | --- | ---: | ---: |
 | `top1` | `66.7% (4/6)` | `100.0% (6/6)` |
 | `top3` | `100.0% (6/6)` | `100.0% (6/6)` |
+
+## 2026-03-27 하드 평가 결과
+
+| metric | baseline | optimized |
+| --- | ---: | ---: |
+| `pass_rate` | `33.3% (2/6)` | `100.0% (6/6)` |
