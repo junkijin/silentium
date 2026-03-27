@@ -20,6 +20,14 @@ bun run dev
 bun test
 ```
 
+## 벤치마크
+
+```bash
+bun run bench
+```
+
+벤치마크 설계와 최근 측정 결과는 [docs/benchmarks.md](/Users/junkijin/Workspaces/silentium/docs/benchmarks.md)를 참고하면 됩니다.
+
 ## 빌드
 
 ```bash
