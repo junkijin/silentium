@@ -8,7 +8,8 @@
     "test": "bun test",
     "build": "bun build src/main.ts --target bun --outdir dist --minify",
     "dev": "bun run src/main.ts",
-    "bench": "bun run bench/run.ts"
+    "bench": "bun run bench/run.ts",
+    "eval:memory": "bun run bench/eval.ts"
   },
   "devDependencies": {
     "@types/bun": "latest"

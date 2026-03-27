@@ -1,4 +1,4 @@
-import { tokenizeForIndex } from "./tokenize";
+import { normalizeSubject, tokenizeForIndex } from "./tokenize";
 import type { Memory, RecallCandidate, RecallQuery } from "./types";
 
 const DEFAULT_HALF_LIFE_DAYS = 30;
@@ -29,18 +29,40 @@ export function calculateLexicalScore(query: RecallQuery, memory: Memory): numbe
   const queryTokens = tokenizeForIndex(
     [query.text, query.subject ?? "", query.type ?? ""].filter(Boolean).join(" "),
   );
-  const memoryTokens = new Set(
-    tokenizeForIndex([memory.subject, memory.content, ...memory.tags].join(" ")),
-  );
+  const subjectTokens = tokenizeForIndex(memory.subject);
+  const contentTokens = tokenizeForIndex(memory.content);
+  const tagTokens = tokenizeForIndex(memory.tags.join(" "));
+  const subjectSet = new Set(subjectTokens);
+  const contentSet = new Set(contentTokens);
+  const tagSet = new Set(tagTokens);
 
   if (queryTokens.length === 0) {
     return 0;
   }
 
-  const overlap = queryTokens.filter((token) => memoryTokens.has(token));
-  const subjectBoost = tokenizeForIndex(memory.subject).some((token) => overlap.includes(token)) ? 0.1 : 0;
+  let weightedOverlap = 0;
 
-  return clamp(overlap.length / queryTokens.length + subjectBoost);
+  for (const token of queryTokens) {
+    if (subjectSet.has(token)) {
+      weightedOverlap += 1.35;
+      continue;
+    }
+
+    if (tagSet.has(token)) {
+      weightedOverlap += 1.1;
+      continue;
+    }
+
+    if (contentSet.has(token)) {
+      weightedOverlap += 1;
+    }
+  }
+
+  const lexical = weightedOverlap / queryTokens.length;
+  const exactSubjectBoost =
+    query.subject && normalizeSubject(query.subject) === normalizeSubject(memory.subject) ? 0.12 : 0;
+
+  return clamp(lexical + exactSubjectBoost);
 }
 
 export function calculateRecallScore(
@@ -48,14 +70,29 @@ export function calculateRecallScore(
   query: RecallQuery,
   now: Date,
 ): Omit<RecallCandidate, "memory"> {
+  const queryTokens = tokenizeForIndex(
+    [query.text, query.subject ?? "", query.type ?? ""].filter(Boolean).join(" "),
+  );
   const lexicalScore = calculateLexicalScore(query, memory);
   const effectiveStrength = calculateEffectiveStrength(memory, now);
+  const subjectTokens = tokenizeForIndex(memory.subject);
+  const subjectCoverage =
+    subjectTokens.length === 0 ? 0 : subjectTokens.filter((token) => queryTokens.includes(token)).length / subjectTokens.length;
+  const typeIntentBoost = queryTokens.includes(memory.type) ? 0.14 : 0;
+  const subjectIntentBoost = subjectCoverage === 1 ? 0.1 : subjectCoverage * 0.06;
   const recallScore = Number(
-    (lexicalScore * 0.45 + effectiveStrength * 0.35 + memory.importance * 0.2).toFixed(6),
+    (
+      lexicalScore * 0.42 +
+      effectiveStrength * 0.28 +
+      memory.importance * 0.18 +
+      typeIntentBoost +
+      subjectIntentBoost
+    ).toFixed(6),
   );
-  const matchedTokens = tokenizeForIndex(query.text).filter((token) =>
-    tokenizeForIndex([memory.subject, memory.content, ...memory.tags].join(" ")).includes(token),
+  const memoryTokens = new Set(
+    tokenizeForIndex([memory.subject, memory.content, ...memory.tags].join(" ")),
   );
+  const matchedTokens = tokenizeForIndex(query.text).filter((token) => memoryTokens.has(token));
 
   return {
     lexicalScore,

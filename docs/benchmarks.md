@@ -20,6 +20,21 @@
 - `rebuild_from_events`
   append-only 이벤트 로그만으로 상태를 복구하는 냉시작 비용을 측정합니다.
 
+## 회상 품질 평가
+
+```bash
+bun run eval:memory
+```
+
+현재 평가는 다음 세 축을 측정합니다.
+
+- `subject_fidelity`
+  질의에 등장한 인물이나 엔터티가 `subject` 필드에 정확히 매핑되는지 평가합니다.
+- `type_disambiguation`
+  자연어 질의 안의 `preference`, `episode` 같은 힌트를 이용해 적절한 메모리 타입을 우선하는지 평가합니다.
+- `temporal_recency`
+  유사한 기억이 여럿 있을 때 최신 사건이나 최신 선호를 앞에 두는지 평가합니다.
+
 ## 실행
 
 ```bash
@@ -50,3 +65,10 @@ BENCH_REBUILD_MEMORY_COUNT=80
 | `bulk_remember` | `49.2498 ms/op` | `4.8110 ms/op` | `10.24x faster` |
 | `targeted_recall` | `30.8446 ms/op` | `2.1451 ms/op` | `14.38x faster` |
 | `rebuild_from_events` | `1.4499 ms/op` | `0.5693 ms/op` | `2.55x faster` |
+
+## 2026-03-27 회상 품질 결과
+
+| metric | baseline | optimized |
+| --- | ---: | ---: |
+| `top1` | `66.7% (4/6)` | `100.0% (6/6)` |
+| `top3` | `100.0% (6/6)` | `100.0% (6/6)` |

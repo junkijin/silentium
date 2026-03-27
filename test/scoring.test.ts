@@ -21,7 +21,7 @@ test("scoring is deterministic with a fixed clock", async () => {
   expect(calculateRecallScore(memory, query, now)).toEqual({
     lexicalScore: 1,
     effectiveStrength: 0.879444,
-    recallScore: 0.917805,
+    recallScore: 0.810244,
     matchedTokens: ["green", "tea"],
   });
 });
