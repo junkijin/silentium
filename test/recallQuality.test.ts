@@ -176,3 +176,39 @@ test("recall prioritizes preference constraints over episodic trip noise", async
     seat.id,
   ].sort());
 });
+
+test("recall can surface a three-hop relational target above anchor memories", async () => {
+  const root = await createTempRoot();
+  const service = await createTestMemoryService(root);
+  await service.remember({
+    type: "fact",
+    subject: "project-a",
+    content: "Project A owner is Mina",
+    tags: ["owner", "mina"],
+    importance: 0.86,
+    strength: 0.85,
+  });
+  await service.remember({
+    type: "fact",
+    subject: "mina",
+    content: "Mina reports to Joon",
+    tags: ["manager", "joon"],
+    importance: 0.85,
+    strength: 0.84,
+  });
+  const target = await service.remember({
+    type: "fact",
+    subject: "joon",
+    content: "Joon works in the security team",
+    tags: ["security", "team"],
+    importance: 0.84,
+    strength: 0.84,
+  });
+
+  const result = await service.recall({
+    text: "what team does the owner of project a report to",
+    limit: 5,
+  });
+
+  expect(result.candidates[0]?.memory.id).toBe(target.id);
+});

@@ -26,6 +26,7 @@
 bun run eval:memory
 bun run eval:memory:hard
 bun run eval:memory:adversarial
+bun run eval:memory:longrange
 ```
 
 현재 평가는 다음 세 축을 측정합니다.
@@ -101,3 +102,11 @@ BENCH_REBUILD_MEMORY_COUNT=80
 | metric | baseline | optimized |
 | --- | ---: | ---: |
 | `pass_rate` | `66.7% (2/3)` | `100.0% (3/3)` |
+
+## 2026-03-27 장거리 평가 결과
+
+`MemoryAgentBench`의 `long-range understanding` 축을 더 강하게 반영한 세트입니다.
+
+| metric | baseline | optimized |
+| --- | ---: | ---: |
+| `pass_rate` | `0.0% (0/2)` | `100.0% (2/2)` |

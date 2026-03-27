@@ -704,44 +704,58 @@ export class MemoryService {
       memoryTokensById.set(candidate.memory.id, new Set(tokenizeMemory(candidate.memory)));
     }
 
-    for (const target of candidates) {
-      const subjectTokens = tokenizeForIndex(target.memory.subject);
+    for (let iteration = 0; iteration < 3; iteration += 1) {
+      let changed = false;
 
-      if (subjectTokens.length === 0 || subjectTokens.some((token) => queryTokenSet.has(token))) {
-        continue;
-      }
+      for (const target of candidates) {
+        const subjectTokens = tokenizeForIndex(target.memory.subject);
 
-      let bestBoost = 0;
-
-      for (const source of candidates) {
-        if (source.memory.id === target.memory.id || source.lexicalScore < 0.25) {
+        if (subjectTokens.length === 0 || subjectTokens.some((token) => queryTokenSet.has(token))) {
           continue;
         }
 
-        const sourceTokens = memoryTokensById.get(source.memory.id);
+        let bestBoost = boosts.get(target.memory.id) ?? 0;
 
-        if (!sourceTokens || !subjectTokens.every((token) => sourceTokens.has(token))) {
-          continue;
-        }
+        for (const source of candidates) {
+          const sourceBridgeBoost = boosts.get(source.memory.id) ?? 0;
 
-        const targetTokenMatches = countLooseTokenMatches(
-          memoryTokensById.get(target.memory.id) ?? [],
-          normalizedQueryTokens,
-        );
+          if (
+            source.memory.id === target.memory.id ||
+            (source.matchedTokens.length === 0 && sourceBridgeBoost === 0)
+          ) {
+            continue;
+          }
 
-        bestBoost = Math.max(
-          bestBoost,
-          Math.min(
-            0.28,
+          const sourceTokens = memoryTokensById.get(source.memory.id);
+
+          if (!sourceTokens || !subjectTokens.every((token) => sourceTokens.has(token))) {
+            continue;
+          }
+
+          const targetTokenMatches = countLooseTokenMatches(
+            memoryTokensById.get(target.memory.id) ?? [],
+            normalizedQueryTokens,
+          );
+          const propagatedBoost = sourceBridgeBoost * 0.72;
+          const nextBoost = Math.min(
+            0.34,
             source.lexicalScore * 0.22 +
               source.matchedTokens.length * 0.015 +
-              Math.min(0.08, targetTokenMatches * 0.04),
-          ),
-        );
+              Math.min(0.08, targetTokenMatches * 0.04) +
+              propagatedBoost,
+          );
+
+          bestBoost = Math.max(bestBoost, nextBoost);
+        }
+
+        if (bestBoost > (boosts.get(target.memory.id) ?? 0)) {
+          boosts.set(target.memory.id, bestBoost);
+          changed = true;
+        }
       }
 
-      if (bestBoost > 0) {
-        boosts.set(target.memory.id, bestBoost);
+      if (!changed) {
+        break;
       }
     }
 
