@@ -10,7 +10,8 @@
     "dev": "bun run src/main.ts",
     "bench": "bun run bench/run.ts",
     "eval:memory": "bun run bench/eval.ts",
-    "eval:memory:hard": "bun run bench/hard-eval.ts"
+    "eval:memory:hard": "bun run bench/hard-eval.ts",
+    "eval:memory:adversarial": "bun run bench/adversarial-eval.ts"
   },
   "devDependencies": {
     "@types/bun": "latest"

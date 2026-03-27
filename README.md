@@ -26,6 +26,7 @@ bun test
 bun run bench
 bun run eval:memory
 bun run eval:memory:hard
+bun run eval:memory:adversarial
 ```
 
 벤치마크 설계와 최근 측정 결과는 [docs/benchmarks.md](/Users/junkijin/Workspaces/silentium/docs/benchmarks.md)를 참고하면 됩니다.

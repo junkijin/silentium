@@ -25,6 +25,7 @@
 ```bash
 bun run eval:memory
 bun run eval:memory:hard
+bun run eval:memory:adversarial
 ```
 
 현재 평가는 다음 세 축을 측정합니다.
@@ -92,3 +93,11 @@ BENCH_REBUILD_MEMORY_COUNT=80
 | metric | baseline | optimized |
 | --- | ---: | ---: |
 | `pass_rate` | `33.3% (2/6)` | `100.0% (6/6)` |
+
+## 2026-03-27 적대적 평가 결과
+
+`MemoryAgentBench`/`MemoryArena`에서 요구하는 `conflict resolution`, `test-time learning`, `constraint bundle retrieval`에 맞춘 적대적 세트입니다.
+
+| metric | baseline | optimized |
+| --- | ---: | ---: |
+| `pass_rate` | `66.7% (2/3)` | `100.0% (3/3)` |

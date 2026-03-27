@@ -128,3 +128,51 @@ test("recall surfaces bridge memory for two-hop relation queries", async () => {
 
   expect(result.candidates.slice(0, 2).map((candidate) => candidate.memory.id)).toContain(target.id);
 });
+
+test("recall prioritizes preference constraints over episodic trip noise", async () => {
+  const root = await createTempRoot();
+  const service = await createTestMemoryService(root);
+  const budget = await service.remember({
+    type: "preference",
+    subject: "trip-budget",
+    content: "Keep the hotel under 200 dollars per night",
+    tags: ["hotel", "budget", "200"],
+    importance: 0.82,
+    strength: 0.8,
+  });
+  const seat = await service.remember({
+    type: "preference",
+    subject: "trip-seat",
+    content: "Prefer aisle seats on flights",
+    tags: ["flight", "aisle", "seat"],
+    importance: 0.8,
+    strength: 0.8,
+  });
+  const chain = await service.remember({
+    type: "preference",
+    subject: "trip-chain",
+    content: "Prefer Marriott hotels when possible",
+    tags: ["hotel", "marriott"],
+    importance: 0.78,
+    strength: 0.78,
+  });
+  await service.remember({
+    type: "episode",
+    subject: "trip-noise",
+    content: "A noisy hostel ruined the last trip",
+    tags: ["hotel", "noise"],
+    importance: 0.68,
+    strength: 0.65,
+  });
+
+  const result = await service.recall({
+    text: "what constraints should you remember for my trip booking hotel and flight",
+    limit: 4,
+  });
+
+  expect(result.candidates.slice(0, 3).map((candidate) => candidate.memory.id).sort()).toEqual([
+    budget.id,
+    chain.id,
+    seat.id,
+  ].sort());
+});

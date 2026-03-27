@@ -3,6 +3,17 @@ import type { Memory, RecallCandidate, RecallQuery } from "./types";
 
 const DEFAULT_HALF_LIFE_DAYS = 30;
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+const CONSTRAINT_INTENT_TOKENS = new Set([
+  "constraint",
+  "constraints",
+  "rule",
+  "rules",
+  "remember",
+  "prefer",
+  "preference",
+  "booking",
+  "book",
+]);
 
 function clamp(value: number): number {
   return Math.max(0, Math.min(1, Number(value.toFixed(6))));
@@ -80,13 +91,16 @@ export function calculateRecallScore(
     subjectTokens.length === 0 ? 0 : subjectTokens.filter((token) => queryTokens.includes(token)).length / subjectTokens.length;
   const typeIntentBoost = queryTokens.includes(memory.type) ? 0.14 : 0;
   const subjectIntentBoost = subjectCoverage === 1 ? 0.1 : subjectCoverage * 0.06;
+  const constraintIntentBoost =
+    queryTokens.some((token) => CONSTRAINT_INTENT_TOKENS.has(token)) && memory.type === "preference" ? 0.12 : 0;
   const recallScore = Number(
     (
       lexicalScore * 0.42 +
       effectiveStrength * 0.28 +
       memory.importance * 0.18 +
       typeIntentBoost +
-      subjectIntentBoost
+      subjectIntentBoost +
+      constraintIntentBoost
     ).toFixed(6),
   );
   const memoryTokens = new Set(
