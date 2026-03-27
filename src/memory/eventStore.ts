@@ -26,8 +26,7 @@ export async function readAllEvents(root: string | undefined): Promise<MemoryEve
     return raw
       .split(/\r?\n/)
       .filter(Boolean)
-      .map((line) => MemoryEventSchema.parse(JSON.parse(line)))
-      .sort((left, right) => left.at.localeCompare(right.at) || left.id.localeCompare(right.id));
+      .map((line) => MemoryEventSchema.parse(JSON.parse(line)));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return [];

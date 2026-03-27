@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { appendEvent } from "./eventStore";
+import { appendEvent, appendEvents } from "./eventStore";
 import { ensureDir, readJsonFile, withFileLock, writeJsonAtomic } from "./fileStore";
 import { rebuildIndexesFromSnapshots } from "./indexer";
 import { getLockPath, getMemoryRoot, getStatsPath } from "./paths";
@@ -13,6 +13,7 @@ import {
 } from "./snapshotStore";
 import { calculateRecallScore, compareRecallCandidates } from "./scoring";
 import {
+  applyRecallToMemoryState,
   forgetMemoryState,
   formMemoryState,
   reinforceMemoryState,
@@ -51,7 +52,7 @@ export interface MemoryServiceOptions {
 }
 
 export interface MemoryChangeEvent {
-  action: "created" | "updated" | "reinforced" | "forgotten" | "archived";
+  action: "created" | "updated" | "reinforced" | "forgotten" | "archived" | "recalled";
   memory: Memory;
   previous: Memory | null;
 }
@@ -138,38 +139,86 @@ export class MemoryService {
   }
 
   async recall(query: Parameters<typeof RecallQuerySchema.parse>[0]): Promise<RecallResult> {
-    await this.initialize();
-    const parsed = RecallQuerySchema.parse(query);
-    const memories = await this.listMemories({
-      type: parsed.type,
-      includeArchived: false,
+    return this.withWriteLock(async () => {
+      const parsed = RecallQuerySchema.parse(query);
+      const memories = await this.listMemories({
+        type: parsed.type,
+        includeArchived: false,
+      });
+      const allowedStatuses = parsed.includeStatuses ?? ["active"];
+      const subjectTokens = parsed.subject ? tokenizeForIndex(parsed.subject) : [];
+      const now = this.clock();
+      const recalledAt = now.toISOString();
+
+      const candidates = memories
+        .filter((memory) => allowedStatuses.includes(memory.status))
+        .filter((memory) => {
+          if (subjectTokens.length === 0) {
+            return true;
+          }
+
+          const memorySubjectTokens = tokenizeForIndex(memory.subject);
+          return subjectTokens.every((token) => memorySubjectTokens.includes(token));
+        })
+        .map((memory) => ({
+          memory,
+          ...calculateRecallScore(memory, parsed, now),
+        }))
+        .filter((candidate) => candidate.recallScore > 0)
+        .sort(compareRecallCandidates);
+
+      const recalledCandidates = candidates.slice(0, parsed.limit);
+
+      if (recalledCandidates.length === 0) {
+        return {
+          query: parsed,
+          candidates: recalledCandidates,
+          totalCandidates: candidates.length,
+        };
+      }
+
+      const updatedCandidates = recalledCandidates.map((candidate) => {
+        const updatedMemory = MemorySchema.parse(
+          applyRecallToMemoryState(candidate.memory, { now: recalledAt }),
+        );
+
+        return {
+          previous: candidate.memory,
+          candidate: {
+            ...candidate,
+            memory: updatedMemory,
+          },
+        };
+      });
+
+      await appendEvents(
+        this.root,
+        updatedCandidates.map(({ candidate }) =>
+          this.createEvent("recalled", candidate.memory, recalledAt, {
+            queryText: parsed.text,
+          }),
+        ),
+      );
+      await Promise.all(
+        updatedCandidates.map(({ candidate }) => saveMemorySnapshot(this.root, candidate.memory)),
+      );
+      await this.syncDerivedFiles();
+      await Promise.all(
+        updatedCandidates.map(({ candidate, previous }) =>
+          this.emit({
+            action: "recalled",
+            memory: candidate.memory,
+            previous,
+          }),
+        ),
+      );
+
+      return {
+        query: parsed,
+        candidates: updatedCandidates.map(({ candidate }) => candidate),
+        totalCandidates: candidates.length,
+      };
     });
-    const allowedStatuses = parsed.includeStatuses ?? ["active"];
-    const subjectTokens = parsed.subject ? tokenizeForIndex(parsed.subject) : [];
-    const now = this.clock();
-
-    const candidates = memories
-      .filter((memory) => allowedStatuses.includes(memory.status))
-      .filter((memory) => {
-        if (subjectTokens.length === 0) {
-          return true;
-        }
-
-        const memorySubjectTokens = tokenizeForIndex(memory.subject);
-        return subjectTokens.every((token) => memorySubjectTokens.includes(token));
-      })
-      .map((memory) => ({
-        memory,
-        ...calculateRecallScore(memory, parsed, now),
-      }))
-      .filter((candidate) => candidate.recallScore > 0)
-      .sort(compareRecallCandidates);
-
-    return {
-      query: parsed,
-      candidates: candidates.slice(0, parsed.limit),
-      totalCandidates: candidates.length,
-    };
   }
 
   async getMemory(memoryId: string, options: { includeArchived?: boolean } = {}): Promise<Memory | null> {
@@ -269,7 +318,7 @@ export class MemoryService {
       return cached;
     }
 
-    const snapshots = await listMemorySnapshots(this.root);
+    const snapshots = await listMemorySnapshots(this.root, { includeArchived: true });
     const stats = calculateMemoryStats(snapshots);
     await writeJsonAtomic(statsPath, stats);
     return stats;
@@ -298,8 +347,11 @@ export class MemoryService {
   }
 
   private async syncDerivedFiles(): Promise<void> {
-    const snapshots = await listMemorySnapshots(this.root);
-    await rebuildIndexesFromSnapshots(this.root, snapshots);
+    const snapshots = await listMemorySnapshots(this.root, { includeArchived: true });
+    await rebuildIndexesFromSnapshots(
+      this.root,
+      snapshots.filter((memory) => memory.status !== "archived"),
+    );
     await writeJsonAtomic(getStatsPath(this.root), calculateMemoryStats(snapshots));
   }
 
@@ -307,13 +359,19 @@ export class MemoryService {
     await this.notifier?.notify(change);
   }
 
-  private createEvent(eventType: MemoryEventType, memory: Memory, now: string): MemoryEvent {
+  private createEvent(
+    eventType: MemoryEventType,
+    memory: Memory,
+    now: string,
+    data: Omit<MemoryEvent["data"], "memory"> = {},
+  ): MemoryEvent {
     return {
       id: this.idGenerator("event"),
       memoryId: memory.id,
       eventType,
       at: now,
       data: {
+        ...data,
         memory,
       },
     };

@@ -30,3 +30,27 @@ test("readEventsByMemoryId filters mixed event streams", async () => {
   expect(filtered).toHaveLength(1);
   expect(filtered[0]?.memoryId).toBe("mem-002");
 });
+
+test("readAllEvents preserves append order when timestamps match", async () => {
+  const root = await createTempRoot();
+  const events: MemoryEvent[] = [
+    {
+      id: "evt-b",
+      memoryId: "mem-001",
+      eventType: "updated",
+      at: "2026-03-27T00:00:00.000Z",
+      data: {},
+    },
+    {
+      id: "evt-a",
+      memoryId: "mem-001",
+      eventType: "recalled",
+      at: "2026-03-27T00:00:00.000Z",
+      data: {},
+    },
+  ];
+
+  await appendEvents(root, events);
+
+  expect(await readAllEvents(root)).toEqual(events);
+});

@@ -43,7 +43,7 @@ export async function rebuildMemoryStore(root?: string): Promise<Memory[]> {
   const activeMemories = memories.filter((memory) => memory.status !== "archived");
 
   await rebuildIndexesFromSnapshots(root, activeMemories);
-  await writeJsonAtomic(getStatsPath(root), calculateMemoryStats(activeMemories));
+  await writeJsonAtomic(getStatsPath(root), calculateMemoryStats(memories));
 
   return memories;
 }

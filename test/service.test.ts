@@ -37,6 +37,8 @@ test("remember -> recall -> reinforce -> update -> forget stays consistent", asy
   const forgotten = await service.forgetMemory(remembered.id);
 
   expect(recalled.candidates[0]?.memory.id).toBe(remembered.id);
+  expect(recalled.candidates[0]?.memory.recallCount).toBe(1);
+  expect(recalled.candidates[0]?.memory.lastAccessedAt).toBe("2026-03-27T00:01:00.000Z");
   expect(forgotten).toEqual(await readJson(fixturePath("service", "final-memory.json")));
   expect(await readJson(getStatsPath(root))).toEqual({
     total: 1,
@@ -53,6 +55,37 @@ test("remember -> recall -> reinforce -> update -> forget stays consistent", asy
     },
     averageStrength: 0,
   });
-  expect(await readJsonl(getEventsPath(root))).toHaveLength(4);
+  expect(await readJsonl(getEventsPath(root))).toHaveLength(5);
   expect(await readJson(path.join(root, "memories", "mem-001.json"))).toEqual(forgotten);
+});
+
+test("archived memories remain counted in stats", async () => {
+  const root = await createTempRoot();
+  const service = await createTestMemoryService(root);
+  const memory = await service.remember({
+    type: "fact",
+    subject: "user",
+    content: "Alice likes tea",
+  });
+
+  await service.updateMemory({
+    id: memory.id,
+    status: "archived",
+  });
+
+  expect(await readJson(getStatsPath(root))).toEqual({
+    total: 1,
+    byType: {
+      fact: 1,
+      preference: 0,
+      episode: 0,
+    },
+    byStatus: {
+      active: 0,
+      superseded: 0,
+      forgotten: 0,
+      archived: 1,
+    },
+    averageStrength: 0.5,
+  });
 });

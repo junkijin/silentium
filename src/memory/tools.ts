@@ -51,7 +51,6 @@ export function registerMemoryTools(server: McpServer, memoryService: MemoryServ
       }),
       outputSchema: RecallResultSchema,
       annotations: {
-        readOnlyHint: true,
         openWorldHint: false,
       },
     },

@@ -32,7 +32,6 @@ test("memory tool handlers return schema-valid structured content and annotation
 
   expect(MemorySchema.safeParse(rememberResult.structuredContent.memory).success).toBe(true);
   expect(RecallResultSchema.safeParse(recallResult.structuredContent).success).toBe(true);
-  expect(internals._registeredTools.recall.annotations?.readOnlyHint).toBe(true);
   expect(internals._registeredTools.get_memory.annotations?.readOnlyHint).toBe(true);
   expect(internals._registeredTools.list_memories.annotations?.readOnlyHint).toBe(true);
   expect(internals._registeredTools.remember.annotations?.openWorldHint).toBe(false);
