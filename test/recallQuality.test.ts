@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createTempRoot, createTestMemoryService } from "./support";
+import { createSequenceClock, createTempRoot, createTestMemoryService } from "./support";
 
 test("recall prefers exact subject memory over note-like distractors", async () => {
   const root = await createTempRoot();
@@ -211,4 +211,221 @@ test("recall can surface a three-hop relational target above anchor memories", a
   });
 
   expect(result.candidates[0]?.memory.id).toBe(target.id);
+});
+
+test("recall abstains when only favorite-style generic overlap exists", async () => {
+  const root = await createTempRoot();
+  const service = await createTestMemoryService(root);
+  await service.remember({
+    type: "preference",
+    subject: "alice-drink",
+    content: "Alice's favorite drink is green tea",
+    tags: ["favorite", "drink", "tea"],
+    importance: 0.8,
+    strength: 0.79,
+  });
+  await service.remember({
+    type: "preference",
+    subject: "alice-seat",
+    content: "Alice's favorite airline seat is aisle",
+    tags: ["favorite", "seat", "aisle"],
+    importance: 0.78,
+    strength: 0.77,
+  });
+
+  const result = await service.recall({
+    text: "what is alice's favorite database engine",
+    limit: 3,
+  });
+
+  expect(result.candidates).toHaveLength(0);
+});
+
+test("recall handles boss and org wording for multi-hop relation queries", async () => {
+  const root = await createTempRoot();
+  const service = await createTestMemoryService(root);
+  await service.remember({
+    type: "fact",
+    subject: "alice",
+    content: "Alice's manager is Dana",
+    tags: ["manager", "dana"],
+    importance: 0.83,
+    strength: 0.82,
+  });
+  const target = await service.remember({
+    type: "fact",
+    subject: "dana",
+    content: "Dana works in the platform team",
+    tags: ["platform", "team"],
+    importance: 0.82,
+    strength: 0.81,
+  });
+  await service.remember({
+    type: "fact",
+    subject: "alice",
+    content: "Alice likes noodles",
+    tags: ["food", "noodles"],
+    importance: 0.63,
+    strength: 0.62,
+  });
+
+  const result = await service.recall({
+    text: "which org does alice's boss belong to",
+    limit: 3,
+  });
+
+  expect(result.candidates[0]?.memory.id).toBe(target.id);
+});
+
+test("recall prefers explicit latest cue over incidental newer episode noise", async () => {
+  const root = await createTempRoot();
+  const service = await createTestMemoryService(
+    root,
+    createSequenceClock([
+      "2026-01-01T00:00:00.000Z",
+      "2026-02-01T00:00:00.000Z",
+      "2026-03-01T00:00:00.000Z",
+      "2026-04-01T00:00:00.000Z",
+    ]),
+  );
+  await service.remember({
+    type: "episode",
+    subject: "alice",
+    content: "Alice visited Busan before Jeju",
+    tags: ["travel", "busan", "jeju"],
+    importance: 0.78,
+    strength: 0.77,
+  });
+  const target = await service.remember({
+    type: "episode",
+    subject: "alice",
+    content: "Alice visited Jeju on the latest trip",
+    tags: ["travel", "jeju", "latest"],
+    importance: 0.8,
+    strength: 0.79,
+  });
+  await service.remember({
+    type: "episode",
+    subject: "alice",
+    content: "Alice visited an unrelated stopover before both trips",
+    tags: ["travel", "stopover"],
+    importance: 0.65,
+    strength: 0.64,
+  });
+
+  const result = await service.recall({
+    text: "where did alice visit on the latest trip",
+    type: "episode",
+    limit: 3,
+  });
+
+  expect(result.candidates[0]?.memory.id).toBe(target.id);
+});
+
+test("recall prefers directed after relation over fresher before distractor", async () => {
+  const root = await createTempRoot();
+  const service = await createTestMemoryService(
+    root,
+    createSequenceClock([
+      "2026-01-01T00:00:00.000Z",
+      "2026-01-31T00:00:00.000Z",
+      "2026-03-02T00:00:00.000Z",
+      "2026-04-01T00:00:00.000Z",
+    ]),
+  );
+  await service.remember({
+    type: "episode",
+    subject: "alice",
+    content: "Alice visited Jeju after Busan",
+    tags: ["travel", "jeju", "busan"],
+    importance: 0.72,
+    strength: 0.72,
+  });
+  const target = await service.remember({
+    type: "episode",
+    subject: "alice",
+    content: "Alice visited Daegu after Jeju",
+    tags: ["travel", "daegu", "jeju"],
+    importance: 0.74,
+    strength: 0.74,
+  });
+  await service.remember({
+    type: "episode",
+    subject: "alice",
+    content: "Alice visited Busan before Jeju",
+    tags: ["travel", "busan", "jeju"],
+    importance: 0.7,
+    strength: 0.7,
+  });
+
+  const result = await service.recall({
+    text: "where did alice go after jeju",
+    type: "episode",
+    limit: 3,
+  });
+
+  expect(result.candidates[0]?.memory.id).toBe(target.id);
+});
+
+test("recall keeps alias anchor and final answer in the top two results", async () => {
+  const root = await createTempRoot();
+  const service = await createTestMemoryService(
+    root,
+    createSequenceClock(
+      Array.from({ length: 40 }, (_, index) =>
+        new Date(Date.parse("2025-01-01T00:00:00.000Z") + index * 86_400_000).toISOString(),
+      ),
+    ),
+  );
+  const alias = await service.remember({
+    type: "fact",
+    subject: "project-a",
+    content: "The bluebird launch refers to Project A",
+    tags: ["bluebird", "launch"],
+    importance: 0.85,
+    strength: 0.85,
+  });
+  await service.remember({
+    type: "fact",
+    subject: "project-a",
+    content: "Project A owner is Mina",
+    tags: ["owner", "mina"],
+    importance: 0.84,
+    strength: 0.84,
+  });
+  await service.remember({
+    type: "fact",
+    subject: "mina",
+    content: "Mina reports to Joon",
+    tags: ["manager", "joon"],
+    importance: 0.84,
+    strength: 0.84,
+  });
+  const target = await service.remember({
+    type: "fact",
+    subject: "joon",
+    content: "Joon works in the payments team",
+    tags: ["payments", "team"],
+    importance: 0.84,
+    strength: 0.84,
+  });
+  for (let index = 0; index < 30; index += 1) {
+    await service.remember({
+      type: index % 2 === 0 ? "fact" : "episode",
+      subject: `noise-${index}`,
+      content: `Noise memory ${index} about unrelated topic`,
+      tags: ["noise", `topic-${index}`],
+      importance: 0.4 + (index % 5) * 0.05,
+      strength: 0.4 + (index % 4) * 0.1,
+    });
+  }
+
+  const result = await service.recall({
+    text: "what team does the bluebird launch owner report to",
+    limit: 5,
+  });
+
+  expect(result.candidates.slice(0, 2).map((candidate) => candidate.memory.id).sort()).toEqual(
+    [alias.id, target.id].sort(),
+  );
 });

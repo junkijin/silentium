@@ -1,19 +1,8 @@
-import { normalizeSubject, tokenizeForIndex } from "./tokenize";
+import { normalizeLooseToken, normalizeSubject, tokenizeForIndex } from "./tokenize";
 import type { Memory, RecallCandidate, RecallQuery } from "./types";
 
 const DEFAULT_HALF_LIFE_DAYS = 30;
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
-const CONSTRAINT_INTENT_TOKENS = new Set([
-  "constraint",
-  "constraints",
-  "rule",
-  "rules",
-  "remember",
-  "prefer",
-  "preference",
-  "booking",
-  "book",
-]);
 
 function clamp(value: number): number {
   return Math.max(0, Math.min(1, Number(value.toFixed(6))));
@@ -43,9 +32,9 @@ export function calculateLexicalScore(query: RecallQuery, memory: Memory): numbe
   const subjectTokens = tokenizeForIndex(memory.subject);
   const contentTokens = tokenizeForIndex(memory.content);
   const tagTokens = tokenizeForIndex(memory.tags.join(" "));
-  const subjectSet = new Set(subjectTokens);
-  const contentSet = new Set(contentTokens);
-  const tagSet = new Set(tagTokens);
+  const subjectSet = new Set(subjectTokens.map((token) => normalizeLooseToken(token)));
+  const contentSet = new Set(contentTokens.map((token) => normalizeLooseToken(token)));
+  const tagSet = new Set(tagTokens.map((token) => normalizeLooseToken(token)));
 
   if (queryTokens.length === 0) {
     return 0;
@@ -54,17 +43,19 @@ export function calculateLexicalScore(query: RecallQuery, memory: Memory): numbe
   let weightedOverlap = 0;
 
   for (const token of queryTokens) {
-    if (subjectSet.has(token)) {
+    const normalizedToken = normalizeLooseToken(token);
+
+    if (subjectSet.has(normalizedToken)) {
       weightedOverlap += 1.35;
       continue;
     }
 
-    if (tagSet.has(token)) {
+    if (tagSet.has(normalizedToken)) {
       weightedOverlap += 1.1;
       continue;
     }
 
-    if (contentSet.has(token)) {
+    if (contentSet.has(normalizedToken)) {
       weightedOverlap += 1;
     }
   }
@@ -91,22 +82,19 @@ export function calculateRecallScore(
     subjectTokens.length === 0 ? 0 : subjectTokens.filter((token) => queryTokens.includes(token)).length / subjectTokens.length;
   const typeIntentBoost = queryTokens.includes(memory.type) ? 0.14 : 0;
   const subjectIntentBoost = subjectCoverage === 1 ? 0.1 : subjectCoverage * 0.06;
-  const constraintIntentBoost =
-    queryTokens.some((token) => CONSTRAINT_INTENT_TOKENS.has(token)) && memory.type === "preference" ? 0.12 : 0;
   const recallScore = Number(
     (
       lexicalScore * 0.42 +
       effectiveStrength * 0.28 +
       memory.importance * 0.18 +
       typeIntentBoost +
-      subjectIntentBoost +
-      constraintIntentBoost
+      subjectIntentBoost
     ).toFixed(6),
   );
-  const memoryTokens = new Set(
-    tokenizeForIndex([memory.subject, memory.content, ...memory.tags].join(" ")),
+  const normalizedQueryTokens = new Set(tokenizeForIndex(query.text).map((token) => normalizeLooseToken(token)));
+  const matchedTokens = tokenizeForIndex([memory.subject, memory.content, ...memory.tags].join(" ")).filter(
+    (token) => normalizedQueryTokens.has(normalizeLooseToken(token)),
   );
-  const matchedTokens = tokenizeForIndex(query.text).filter((token) => memoryTokens.has(token));
 
   return {
     lexicalScore,

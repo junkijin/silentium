@@ -1,5 +1,11 @@
+const TOKEN_REGEX = /[\p{L}\p{N}]+/gu;
+
+export function tokenizeForSequence(text: string): string[] {
+  return text.toLowerCase().match(TOKEN_REGEX) ?? [];
+}
+
 export function tokenizeForIndex(text: string): string[] {
-  const tokens = text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  const tokens = tokenizeForSequence(text);
   const seen = new Set<string>();
   const deduped: string[] = [];
 
@@ -13,6 +19,10 @@ export function tokenizeForIndex(text: string): string[] {
   }
 
   return deduped;
+}
+
+export function normalizeLooseToken(token: string): string {
+  return token.length > 3 && token.endsWith("s") ? token.slice(0, -1) : token;
 }
 
 export function normalizeSubject(subject: string): string {

@@ -29,7 +29,12 @@ import {
   reinforceMemoryState,
   updateMemoryState,
 } from "./stateMachine";
-import { normalizeSubject, tokenizeForIndex } from "./tokenize";
+import {
+  normalizeLooseToken,
+  normalizeSubject,
+  tokenizeForIndex,
+  tokenizeForSequence,
+} from "./tokenize";
 import {
   calculateMemoryStats,
   MemorySchema,
@@ -52,30 +57,6 @@ type IdSetMap<T extends string> = Map<T, Set<string>>;
 type SubjectSetMap = Map<string, Set<string>>;
 type TokenSetMap = Map<string, Set<string>>;
 type InvertedIndex = Record<string, string[]>;
-
-const RECENCY_INTENT_TOKENS = new Set([
-  "current",
-  "currently",
-  "now",
-  "latest",
-  "recent",
-  "recently",
-]);
-
-const RELATIONAL_INTENT_TOKENS = new Set([
-  "manager",
-  "team",
-  "spouse",
-  "boss",
-  "lead",
-  "mentor",
-  "report",
-  "reports",
-  "works",
-  "work",
-  "lives",
-  "live",
-]);
 
 export interface ListMemoriesOptions {
   type?: MemoryType;
@@ -211,10 +192,6 @@ function sortByUpdatedAtDesc(left: Memory, right: Memory): number {
   );
 }
 
-function normalizeLooseToken(token: string): string {
-  return token.length > 3 && token.endsWith("s") ? token.slice(0, -1) : token;
-}
-
 function countLooseTokenMatches(tokens: Iterable<string>, queryTokenSet: Set<string>): number {
   let matches = 0;
 
@@ -225,6 +202,57 @@ function countLooseTokenMatches(tokens: Iterable<string>, queryTokenSet: Set<str
   }
 
   return matches;
+}
+
+function collectLooseTokenMatches(tokens: Iterable<string>, queryTokenSet: Set<string>): Set<string> {
+  const matches = new Set<string>();
+
+  for (const token of tokens) {
+    const normalizedToken = normalizeLooseToken(token);
+
+    if (queryTokenSet.has(normalizedToken)) {
+      matches.add(normalizedToken);
+    }
+  }
+
+  return matches;
+}
+
+function calculateOrderedPhraseBoost(queryText: string, memory: Memory): number {
+  const queryTokens = tokenizeForSequence(queryText)
+    .map((token) => normalizeLooseToken(token))
+    .filter((token) => token.length >= 3);
+  const memoryTokens = tokenizeForSequence([memory.subject, memory.content, ...memory.tags].join(" "))
+    .map((token) => normalizeLooseToken(token))
+    .filter((token) => token.length >= 3);
+
+  if (queryTokens.length < 2 || memoryTokens.length < 2) {
+    return 0;
+  }
+
+  let longestRun = 0;
+
+  for (let queryIndex = 0; queryIndex < queryTokens.length; queryIndex += 1) {
+    for (let memoryIndex = 0; memoryIndex < memoryTokens.length; memoryIndex += 1) {
+      let runLength = 0;
+
+      while (
+        queryIndex + runLength < queryTokens.length &&
+        memoryIndex + runLength < memoryTokens.length &&
+        queryTokens[queryIndex + runLength] === memoryTokens[memoryIndex + runLength]
+      ) {
+        runLength += 1;
+      }
+
+      longestRun = Math.max(longestRun, runLength);
+    }
+  }
+
+  if (longestRun < 2) {
+    return 0;
+  }
+
+  return Math.min(0.1, (longestRun - 1) * 0.04);
 }
 
 export class MemoryService {
@@ -310,11 +338,9 @@ export class MemoryService {
       const subjectTokens = parsed.subject ? tokenizeForIndex(parsed.subject) : [];
       const now = this.clock();
       const recalledAt = now.toISOString();
-      const candidateIds = this.getRecallCandidateIds(parsed.text, parsed.subject, {
-        expandSubjectLinks: queryTokens.some((token) => RELATIONAL_INTENT_TOKENS.has(token)),
-      });
+      const candidateIds = this.getRecallCandidateIds(parsed.text, parsed.subject);
 
-      const candidates = this.applyRecallIntentBoosts(
+      const candidates = this.applyStructuralBoosts(
         [...candidateIds]
         .map((id) => this.memories.get(id) ?? null)
         .filter((memory): memory is Memory => memory !== null)
@@ -333,8 +359,9 @@ export class MemoryService {
           ...calculateRecallScore(memory, parsed, now),
         }))
         .filter((candidate) => candidate.recallScore > 0),
+        parsed.text,
         queryTokens,
-      )
+      ).filter((candidate, _index, allCandidates) => this.hasRecallSupport(candidate, allCandidates, queryTokens))
         .sort(compareRecallCandidates);
 
       const recalledCandidates = candidates.slice(0, parsed.limit);
@@ -618,7 +645,6 @@ export class MemoryService {
   private getRecallCandidateIds(
     text: string,
     subject?: string,
-    options: { expandSubjectLinks?: boolean } = {},
   ): Set<string> {
     const tokens = tokenizeForIndex([text, subject ?? ""].filter(Boolean).join(" "));
 
@@ -640,8 +666,12 @@ export class MemoryService {
       }
     }
 
-    if (options.expandSubjectLinks) {
-      for (const memoryId of [...candidates]) {
+    let frontier = [...candidates];
+
+    for (let depth = 0; depth < 2; depth += 1) {
+      const nextFrontier: string[] = [];
+
+      for (const memoryId of frontier) {
         const memory = this.memories.get(memoryId);
 
         if (!memory || !isIndexedMemory(memory)) {
@@ -656,40 +686,78 @@ export class MemoryService {
           }
 
           for (const linkedId of linkedIds) {
+            if (candidates.has(linkedId)) {
+              continue;
+            }
+
             candidates.add(linkedId);
+            nextFrontier.push(linkedId);
           }
         }
+      }
+
+      frontier = nextFrontier;
+
+      if (frontier.length === 0) {
+        break;
       }
     }
 
     return candidates;
   }
 
-  private applyRecallIntentBoosts(
+  private applyStructuralBoosts(
     candidates: RecallCandidate[],
+    queryText: string,
     queryTokens: string[],
   ): RecallCandidate[] {
     if (candidates.length === 0) {
       return candidates;
     }
 
-    const hasRecencyIntent = queryTokens.some((token) => RECENCY_INTENT_TOKENS.has(token));
-    const hasRelationalIntent = queryTokens.some((token) => RELATIONAL_INTENT_TOKENS.has(token));
-    const bridgeBoostById = hasRelationalIntent
-      ? this.buildBridgeBoostMap(candidates, new Set(queryTokens))
-      : new Map<string, number>();
+    const bridgeBoostById = this.buildBridgeBoostMap(candidates, new Set(queryTokens));
+    const chainCoverageBoostById = this.buildChainCoverageBoostMap(candidates, new Set(queryTokens));
 
     return candidates.map((candidate) => {
       const bridgeBoost = bridgeBoostById.get(candidate.memory.id) ?? 0;
-      const recencyBoost = hasRecencyIntent
-        ? this.calculateRecencyIntentBoost(candidate.memory, candidates)
-        : 0;
+      const chainCoverageBoost = chainCoverageBoostById.get(candidate.memory.id) ?? 0;
+      const freshnessBoost = this.calculateFreshnessBoost(candidate.memory, candidates, queryTokens);
+      const phraseBoost = calculateOrderedPhraseBoost(queryText, candidate.memory);
 
       return {
         ...candidate,
-        recallScore: Number(Math.min(1, candidate.recallScore + bridgeBoost + recencyBoost).toFixed(6)),
+        recallScore: Number(
+          Math.min(
+            1,
+            candidate.recallScore +
+              bridgeBoost +
+              chainCoverageBoost +
+              freshnessBoost +
+              phraseBoost,
+          ).toFixed(6),
+        ),
       };
     });
+  }
+
+  private hasRecallSupport(
+    candidate: RecallCandidate,
+    candidates: RecallCandidate[],
+    queryTokens: string[],
+  ): boolean {
+    if (this.hasDiscriminativeLexicalSupport(candidate)) {
+      return true;
+    }
+
+    if (this.hasBridgeSupport(candidate, candidates, queryTokens)) {
+      return true;
+    }
+
+    if (this.hasVersionClusterSupport(candidate, candidates, queryTokens)) {
+      return true;
+    }
+
+    return this.hasSubjectClusterSupport(candidate, candidates, queryTokens);
   }
 
   private buildBridgeBoostMap(
@@ -732,16 +800,26 @@ export class MemoryService {
             continue;
           }
 
+          const targetTokens = memoryTokensById.get(target.memory.id) ?? new Set<string>();
+          const sourceQueryCoverage = collectLooseTokenMatches(sourceTokens, normalizedQueryTokens);
+          const targetQueryCoverage = collectLooseTokenMatches(targetTokens, normalizedQueryTokens);
           const targetTokenMatches = countLooseTokenMatches(
-            memoryTokensById.get(target.memory.id) ?? [],
+            targetTokens,
             normalizedQueryTokens,
           );
-          const propagatedBoost = sourceBridgeBoost * 0.72;
+          const novelQueryCoverage = [...targetQueryCoverage].filter((token) => !sourceQueryCoverage.has(token)).length;
+          const novelTargetTokens = [...targetTokens].filter((token) => {
+            return token.length >= 3 && !normalizedQueryTokens.has(normalizeLooseToken(token)) && !subjectTokens.includes(token);
+          }).length;
+          const propagatedBoost = sourceBridgeBoost * 0.85;
           const nextBoost = Math.min(
-            0.34,
-            source.lexicalScore * 0.22 +
+            0.44,
+              source.recallScore * 0.26 +
+              source.lexicalScore * 0.12 +
               source.matchedTokens.length * 0.015 +
               Math.min(0.08, targetTokenMatches * 0.04) +
+              Math.min(0.18, novelQueryCoverage * 0.09) +
+              Math.min(0.12, novelTargetTokens * 0.03) +
               propagatedBoost,
           );
 
@@ -762,9 +840,93 @@ export class MemoryService {
     return boosts;
   }
 
-  private calculateRecencyIntentBoost(
+  private buildChainCoverageBoostMap(
+    candidates: RecallCandidate[],
+    queryTokenSet: Set<string>,
+  ): Map<string, number> {
+    const informativeQueryTokens = new Set(
+      [...queryTokenSet]
+        .map((token) => normalizeLooseToken(token))
+        .filter((token) => token.length >= 3),
+    );
+    const memoryTokensById = new Map<string, Set<string>>();
+    const directCoverageById = new Map<string, Set<string>>();
+    const bestCoverageById = new Map<string, Set<string>>();
+
+    for (const candidate of candidates) {
+      const memoryTokens = new Set(tokenizeMemory(candidate.memory));
+      memoryTokensById.set(candidate.memory.id, memoryTokens);
+
+      const directCoverage = collectLooseTokenMatches(memoryTokens, informativeQueryTokens);
+      directCoverageById.set(candidate.memory.id, directCoverage);
+      bestCoverageById.set(candidate.memory.id, new Set(directCoverage));
+    }
+
+    for (let iteration = 0; iteration < 3; iteration += 1) {
+      let changed = false;
+
+      for (const target of candidates) {
+        const subjectTokens = tokenizeForIndex(target.memory.subject);
+
+        if (subjectTokens.length === 0 || subjectTokens.some((token) => informativeQueryTokens.has(normalizeLooseToken(token)))) {
+          continue;
+        }
+
+        const currentCoverage = bestCoverageById.get(target.memory.id) ?? new Set<string>();
+        let bestCoverage = currentCoverage;
+
+        for (const source of candidates) {
+          if (source.memory.id === target.memory.id) {
+            continue;
+          }
+
+          const sourceTokens = memoryTokensById.get(source.memory.id);
+
+          if (!sourceTokens || !subjectTokens.every((token) => sourceTokens.has(token))) {
+            continue;
+          }
+
+          const sourceCoverage = bestCoverageById.get(source.memory.id) ?? new Set<string>();
+          const targetCoverage = directCoverageById.get(target.memory.id) ?? new Set<string>();
+          const combinedCoverage = new Set([...sourceCoverage, ...targetCoverage]);
+
+          if (combinedCoverage.size > bestCoverage.size) {
+            bestCoverage = combinedCoverage;
+          }
+        }
+
+        if (bestCoverage.size > currentCoverage.size) {
+          bestCoverageById.set(target.memory.id, bestCoverage);
+          changed = true;
+        }
+      }
+
+      if (!changed) {
+        break;
+      }
+    }
+
+    const boosts = new Map<string, number>();
+
+    for (const candidate of candidates) {
+      const directCoverage = directCoverageById.get(candidate.memory.id) ?? new Set<string>();
+      const bestCoverage = bestCoverageById.get(candidate.memory.id) ?? new Set<string>();
+      const linkedCoverageGain = bestCoverage.size - directCoverage.size;
+
+      if (linkedCoverageGain <= 0) {
+        continue;
+      }
+
+      boosts.set(candidate.memory.id, Math.min(0.2, linkedCoverageGain * 0.04));
+    }
+
+    return boosts;
+  }
+
+  private calculateFreshnessBoost(
     memory: Memory,
     candidates: RecallCandidate[],
+    queryTokens: string[],
   ): number {
     const related = candidates
       .map((candidate) => candidate.memory)
@@ -776,20 +938,117 @@ export class MemoryService {
       .sort(sortByUpdatedAtDesc);
 
     const rank = related.findIndex((candidateMemory) => candidateMemory.id === memory.id);
+    const subjectTokens = tokenizeForIndex(memory.subject);
+    const structuredSubject = subjectTokens.length > 1;
+    const normalizedSubjectTokens = new Set(subjectTokens.map((token) => normalizeLooseToken(token)));
+    const memoryContextTokens = new Set(
+      tokenizeMemory(memory)
+        .map((token) => normalizeLooseToken(token))
+        .filter((token) => !normalizedSubjectTokens.has(token)),
+    );
+    const versionLikeCluster =
+      structuredSubject &&
+      related.some((candidateMemory) => {
+        if (candidateMemory.id === memory.id) {
+          return false;
+        }
+
+        return tokenizeMemory(candidateMemory)
+          .map((token) => normalizeLooseToken(token))
+          .some((token) => memoryContextTokens.has(token) && !normalizedSubjectTokens.has(token));
+      });
+    const exactSubjectAlignment =
+      structuredSubject && subjectTokens.every((token) => queryTokens.includes(token));
 
     if (rank === -1 || related.length <= 1) {
       return 0;
     }
 
     if (rank === 0) {
-      return 0.22;
+      return exactSubjectAlignment || versionLikeCluster ? 0.16 : 0.08;
     }
 
     if (rank === 1) {
-      return 0.08;
+      return exactSubjectAlignment || versionLikeCluster ? 0.06 : 0.03;
     }
 
-    return 0.03;
+    return 0;
+  }
+
+  private hasDiscriminativeLexicalSupport(candidate: RecallCandidate): boolean {
+    const subjectTokens = new Set(tokenizeForIndex(candidate.memory.subject));
+    const informativeMatches = [...new Set(candidate.matchedTokens)].filter((token) => {
+      return token.length >= 3 && !subjectTokens.has(token);
+    });
+    const support = informativeMatches.reduce((sum, token) => {
+      const tokenFrequency = this.activeIdsByToken.get(token)?.size ?? 1;
+      return sum + 1 / tokenFrequency;
+    }, 0);
+
+    return support >= 0.75;
+  }
+
+  private hasBridgeSupport(
+    candidate: RecallCandidate,
+    candidates: RecallCandidate[],
+    queryTokens: string[],
+  ): boolean {
+    const normalizedQueryTokens = new Set(queryTokens.map((token) => normalizeLooseToken(token)));
+    const subjectTokens = tokenizeForIndex(candidate.memory.subject);
+
+    if (subjectTokens.length === 0 || subjectTokens.some((token) => normalizedQueryTokens.has(normalizeLooseToken(token)))) {
+      return false;
+    }
+
+    return candidates.some((source) => {
+      if (source.memory.id === candidate.memory.id || source.matchedTokens.length === 0) {
+        return false;
+      }
+
+      const sourceTokens = new Set(tokenizeMemory(source.memory));
+      return subjectTokens.every((token) => sourceTokens.has(token));
+    });
+  }
+
+  private hasSubjectClusterSupport(
+    candidate: RecallCandidate,
+    candidates: RecallCandidate[],
+    queryTokens: string[],
+  ): boolean {
+    const subjectTokens = tokenizeForIndex(candidate.memory.subject);
+
+    return queryTokens.some((token) => {
+      if (!subjectTokens.includes(token)) {
+        return false;
+      }
+
+      const cluster = candidates.filter((other) => {
+        return other.memory.type === candidate.memory.type && tokenizeForIndex(other.memory.subject).includes(token);
+      });
+
+      return cluster.length >= 3 || (cluster.length >= 2 && cluster.some((other) => this.hasDiscriminativeLexicalSupport(other)));
+    });
+  }
+
+  private hasVersionClusterSupport(
+    candidate: RecallCandidate,
+    candidates: RecallCandidate[],
+    queryTokens: string[],
+  ): boolean {
+    const subjectTokens = tokenizeForIndex(candidate.memory.subject);
+
+    if (!queryTokens.some((token) => subjectTokens.includes(token))) {
+      return false;
+    }
+
+    const cluster = candidates.filter((other) => {
+      return (
+        other.memory.type === candidate.memory.type &&
+        normalizeSubject(other.memory.subject) === normalizeSubject(candidate.memory.subject)
+      );
+    });
+
+    return cluster.length >= 2;
   }
 
   private async persistChange(

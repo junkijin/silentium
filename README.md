@@ -25,6 +25,7 @@ bun test
 ```bash
 bun run bench
 bun run eval:memory
+bun run eval:memory:marathon
 bun run eval:memory:hard
 bun run eval:memory:adversarial
 bun run eval:memory:longrange
