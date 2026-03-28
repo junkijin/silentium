@@ -3,6 +3,23 @@ import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/
 
 const textDecoder = new TextDecoder();
 
+interface StdioInputLike {
+  on(event: "data" | "error", listener: (value: unknown) => void): unknown;
+  off(event: "data" | "error", listener: (value: unknown) => void): unknown;
+  listenerCount(event: "data" | "error"): number;
+  pause(): unknown;
+}
+
+interface StdioOutputLike {
+  write(chunk: string): boolean;
+  once(event: "drain", listener: () => void): unknown;
+}
+
+export interface StdioServerTransportOptions {
+  stdin?: StdioInputLike;
+  stdout?: StdioOutputLike;
+}
+
 function chunkToString(chunk: unknown): string {
   if (typeof chunk === "string") {
     return chunk;
@@ -16,14 +33,19 @@ function chunkToString(chunk: unknown): string {
 }
 
 export class StdioServerTransport implements Transport {
-  private readonly stdin = process.stdin;
-  private readonly stdout = process.stdout;
+  private readonly stdin: StdioInputLike;
+  private readonly stdout: StdioOutputLike;
   private buffer = "";
   private started = false;
 
   onclose?: () => void;
   onerror?: (error: Error) => void;
   onmessage?: <T extends JSONRPCMessage>(message: T, extra?: MessageExtraInfo) => void;
+
+  constructor(options: StdioServerTransportOptions = {}) {
+    this.stdin = options.stdin ?? process.stdin;
+    this.stdout = options.stdout ?? process.stdout;
+  }
 
   private readonly handleData = (chunk: unknown) => {
     this.buffer += chunkToString(chunk);

@@ -15,6 +15,10 @@ export interface FileLockHandle {
 
 const locks = new Map<string, LockState>();
 
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export async function ensureDir(directoryPath: string): Promise<void> {
   await fs.mkdir(directoryPath, { recursive: true });
 }
@@ -32,7 +36,7 @@ export async function readJsonFile<T>(
       return null;
     }
 
-    throw error;
+    throw new Error(`Failed to read JSON file ${filePath}: ${describeError(error)}`);
   }
 }
 

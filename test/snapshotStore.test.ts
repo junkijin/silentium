@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   archiveMemorySnapshot,
@@ -31,4 +31,14 @@ test("archiveMemorySnapshot moves the file into archive", async () => {
   expect(await readMemorySnapshot(root, memory.id)).toBeNull();
   expect(await readMemorySnapshot(root, memory.id, { includeArchived: true })).toEqual(memory);
   expect(await listMemorySnapshots(root, { includeArchived: true })).toHaveLength(1);
+});
+
+test("listMemorySnapshots reports the file path for invalid snapshot content", async () => {
+  const root = await createTempRoot();
+  const invalidPath = path.join(root, "memories", "broken.json");
+
+  await mkdir(path.dirname(invalidPath), { recursive: true });
+  await writeFile(invalidPath, '{"id":1}\n', "utf8");
+
+  await expect(listMemorySnapshots(root)).rejects.toThrow(invalidPath);
 });

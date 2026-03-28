@@ -37,3 +37,55 @@ test("memory tool handlers return schema-valid structured content and annotation
   expect(internals._registeredTools.remember.annotations?.openWorldHint).toBe(false);
   expect(internals._registeredTools.forget_memory.annotations?.openWorldHint).toBe(false);
 });
+
+test("tool handlers preserve archived visibility rules and list filters", async () => {
+  const root = await createTempRoot();
+  const service = await createTestMemoryService(root);
+  const server = new McpServer({ name: "silentium-test", version: "1.0.0" });
+
+  registerMemoryTools(server, service);
+
+  const internals = server as unknown as {
+    _registeredTools: Record<string, { handler: (...args: any[]) => Promise<any> }>;
+  };
+
+  const active = (
+    await internals._registeredTools.remember.handler(
+      {
+        type: "fact",
+        subject: "active-memory",
+        content: "Active memory",
+      },
+      {},
+    )
+  ).structuredContent.memory;
+  const archived = (
+    await internals._registeredTools.remember.handler(
+      {
+        type: "fact",
+        subject: "archived-memory",
+        content: "Archived memory",
+      },
+      {},
+    )
+  ).structuredContent.memory;
+
+  await internals._registeredTools.update_memory.handler(
+    {
+      id: archived.id,
+      status: "archived",
+    },
+    {},
+  );
+
+  const defaultList = await internals._registeredTools.list_memories.handler(undefined, {});
+  const archivedList = await internals._registeredTools.list_memories.handler({ status: "archived" }, {});
+  const archivedMemory = await internals._registeredTools.get_memory.handler({ id: archived.id }, {});
+
+  expect(defaultList.structuredContent.memories.map((memory: { id: string }) => memory.id)).toEqual([active.id]);
+  expect(archivedList.structuredContent.memories.map((memory: { id: string }) => memory.id)).toEqual([archived.id]);
+  expect(archivedMemory.structuredContent.memory).toMatchObject({
+    id: archived.id,
+    status: "archived",
+  });
+});

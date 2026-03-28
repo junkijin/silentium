@@ -3,6 +3,10 @@ import { appendJsonl, withFileLock } from "./fileStore";
 import { getEventsPath } from "./paths";
 import { MemoryEventSchema, type MemoryEvent } from "./types";
 
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export async function appendEvent(root: string | undefined, event: MemoryEvent): Promise<void> {
   const parsed = MemoryEventSchema.parse(event);
   const eventsPath = getEventsPath(root);
@@ -20,13 +24,23 @@ export async function appendEvents(root: string | undefined, events: MemoryEvent
 }
 
 export async function readAllEvents(root: string | undefined): Promise<MemoryEvent[]> {
+  const eventsPath = getEventsPath(root);
+
   try {
-    const raw = await fs.readFile(getEventsPath(root), "utf8");
+    const raw = await fs.readFile(eventsPath, "utf8");
 
     return raw
       .split(/\r?\n/)
       .filter(Boolean)
-      .map((line) => MemoryEventSchema.parse(JSON.parse(line)));
+      .map((line, index) => {
+        try {
+          return MemoryEventSchema.parse(JSON.parse(line));
+        } catch (error) {
+          throw new Error(
+            `Failed to parse event at ${eventsPath}:${index + 1}: ${describeError(error)}`,
+          );
+        }
+      });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return [];

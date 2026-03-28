@@ -51,3 +51,52 @@ test("memory resources return expected JSON for stats, id, and type URIs", async
   });
   expect(JSON.parse(typeResult.contents[0].text).memories).toHaveLength(1);
 });
+
+test("type resources hide archived memories while id resources still expose them", async () => {
+  const root = await createTempRoot();
+  const service = await createTestMemoryService(root);
+  const server = new McpServer({ name: "silentium-test", version: "1.0.0" });
+  const active = await service.remember({
+    type: "fact",
+    subject: "active",
+    content: "Active fact",
+  });
+  const archived = await service.remember({
+    type: "fact",
+    subject: "archived",
+    content: "Archived fact",
+  });
+
+  await service.updateMemory({
+    id: archived.id,
+    status: "archived",
+  });
+
+  registerMemoryResources(server, service);
+
+  const internals = server as unknown as {
+    _registeredResourceTemplates: Record<
+      string,
+      { readCallback: (...args: any[]) => Promise<any> }
+    >;
+  };
+
+  const typeResult = await internals._registeredResourceTemplates["memory-by-type"].readCallback(
+    new URL("silentium://memory/type/fact"),
+    { type: "fact" },
+    {},
+  );
+  const archivedById = await internals._registeredResourceTemplates["memory-by-id"].readCallback(
+    new URL(`silentium://memory/${archived.id}`),
+    { id: archived.id },
+    {},
+  );
+
+  expect(JSON.parse(typeResult.contents[0].text).memories.map((memory: { id: string }) => memory.id)).toEqual([
+    active.id,
+  ]);
+  expect(JSON.parse(archivedById.contents[0].text)).toMatchObject({
+    id: archived.id,
+    status: "archived",
+  });
+});

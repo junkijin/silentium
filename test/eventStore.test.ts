@@ -54,3 +54,16 @@ test("readAllEvents preserves append order when timestamps match", async () => {
 
   expect(await readAllEvents(root)).toEqual(events);
 });
+
+test("readAllEvents reports file path and line for invalid event data", async () => {
+  const root = await createTempRoot();
+  const eventsPath = getEventsPath(root);
+
+  await writeFile(
+    eventsPath,
+    ['{"id":"evt-001","memoryId":"mem-001","eventType":"remembered","at":"2026-03-27T00:00:00.000Z","data":{}}', '{"id":1}'].join("\n"),
+    "utf8",
+  );
+
+  await expect(readAllEvents(root)).rejects.toThrow(`${eventsPath}:2`);
+});
